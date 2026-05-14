@@ -1,0 +1,16 @@
+{
+  "name": "encrypter",
+  "version": "1.0.0",
+  "description": "",
+  "license": "ISC",
+  "author": "",
+  "type": "commonjs",
+  "main": "vault.js",
+  "scripts": {
+    "start": "node vault.js"
+  },
+  "dependencies": {
+    "cli-progress": "^3.12.0",
+    "commander": "^14.0.3"
+  }
+}
