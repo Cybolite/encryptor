@@ -8,7 +8,7 @@ const { Command } = require('commander');
 
 const program = new Command();
 
-const MANIFEST_EXTENSION = '.rcv';
+const MANIFEST_FILE = 'vault.manifest.json';
 
 const EXTENSIONS = [
     '.qx',
@@ -17,76 +17,6 @@ const EXTENSIONS = [
     '.vx',
     '.jr'
 ];
-
-function manifestTimestamp() {
-
-    const now = new Date();
-
-    const pad = (value) => value
-        .toString()
-        .padStart(2, '0');
-
-    return (
-        pad(now.getDate()) +
-        pad(now.getMonth() + 1) +
-        now.getFullYear().toString().slice(-2) +
-        pad(now.getHours()) +
-        pad(now.getMinutes())
-    );
-}
-
-function manifestFileName(code) {
-    return `${code}${MANIFEST_EXTENSION}`;
-}
-
-function encodeManifest(content, code) {
-
-    const key = crypto
-        .createHash('sha256')
-        .update(code)
-        .digest();
-
-    const buffer = Buffer.from(content, 'utf8');
-
-    const encoded = Buffer.alloc(buffer.length);
-
-    for (let i = 0; i < buffer.length; i++) {
-        encoded[i] = buffer[i] ^ key[i % key.length];
-    }
-
-    return encoded.toString('base64');
-}
-
-function decodeManifest(content, code) {
-
-    const key = crypto
-        .createHash('sha256')
-        .update(code)
-        .digest();
-
-    const buffer = Buffer.from(content, 'base64');
-
-    const decoded = Buffer.alloc(buffer.length);
-
-    for (let i = 0; i < buffer.length; i++) {
-        decoded[i] = buffer[i] ^ key[i % key.length];
-    }
-
-    return decoded.toString('utf8');
-}
-
-function getManifestPath(target) {
-
-    const files = fs.readdirSync(target);
-
-    const manifest = files.find(file =>
-        file.endsWith(MANIFEST_EXTENSION)
-    );
-
-    return manifest
-        ? path.join(target, manifest)
-        : null;
-}
 
 function sha256File(file) {
 
@@ -171,19 +101,7 @@ function walk(dir, result = []) {
 
         const stat = fs.statSync(full);
 
-        if (
-            file.endsWith(MANIFEST_EXTENSION) ||
-            (file.startsWith('.') && stat.isFile() && stat.size <= 0)
-        ) {
-
-            if (
-                file.startsWith('.') &&
-                stat.isFile() &&
-                stat.size <= 0
-            ) {
-                fs.unlinkSync(full);
-            }
-
+        if (file === MANIFEST_FILE) {
             return;
         }
 
@@ -267,15 +185,7 @@ function decryptFile(input, output, key) {
 
         decipher.setAuthTag(tag);
 
-        const contentSize = stat.size - 28;
-        let inputStream;
-
-        if (contentSize <= 0) {
-            resolve();
-            return;
-        }
-
-        inputStream = fs.createReadStream(input, {
+        const inputStream = fs.createReadStream(input, {
             start: 12,
             end: stat.size - 17
         });
@@ -356,8 +266,6 @@ async function encryptDirectory(target, password = '') {
 
     const salt = crypto.randomBytes(16);
 
-    const manifestCode = manifestTimestamp();
-
     const key = deriveKey(
         machineId(),
         password,
@@ -401,37 +309,12 @@ async function encryptDirectory(target, password = '') {
 
         fs.unlinkSync(file);
 
-        let currentDir = path.dirname(file);
-
-        while (
-            currentDir !== target &&
-            fs.existsSync(currentDir) &&
-            fs.readdirSync(currentDir).length === 0
-        ) {
-            fs.rmdirSync(currentDir);
-            currentDir = path.dirname(currentDir);
-        }
-
         console.log('Encrypted:', relative);
     }
 
-    const manifestContent = JSON.stringify(
-        manifest,
-        null,
-        2
-    );
-
-    const encodedManifest = encodeManifest(
-        manifestContent,
-        manifestCode
-    );
-
     fs.writeFileSync(
-        path.join(
-            target,
-            manifestFileName(manifestCode)
-        ),
-        encodedManifest
+        path.join(target, MANIFEST_FILE),
+        JSON.stringify(manifest, null, 2)
     );
 
     console.log('\nEncryption complete');
@@ -445,30 +328,22 @@ async function decryptDirectory(
     targetSelection = ''
 ) {
 
-    const manifestPath = getManifestPath(target);
+    const manifestPath = path.join(
+        target,
+        MANIFEST_FILE
+    );
 
-    if (!manifestPath) {
+    if (!fs.existsSync(manifestPath)) {
 
         throw new Error(
-            'Config not found or seems not encrypted.'
+            'Manifest not found'
         );
     }
 
-    const manifestCode = path
-        .basename(
-            manifestPath,
-            MANIFEST_EXTENSION
-        );
-
-    const encodedManifest = fs.readFileSync(
-        manifestPath,
-        'utf8'
-    );
-
     const manifest = JSON.parse(
-        decodeManifest(
-            encodedManifest,
-            manifestCode
+        fs.readFileSync(
+            manifestPath,
+            'utf8'
         )
     );
 
@@ -566,18 +441,7 @@ async function decryptDirectory(
         console.log('Decrypted:', file.original);
     }
 
-    if (
-        manifest.files.every(file => {
-            const encryptedPath = path.join(
-                target,
-                file.encrypted
-            );
-
-            return !fs.existsSync(encryptedPath);
-        })
-    ) {
-        fs.unlinkSync(manifestPath);
-    }
+    fs.unlinkSync(manifestPath);
 
     console.log('\nDecryption complete');
 }
@@ -612,29 +476,22 @@ program
     .command('analyze <directory>')
     .action((directory) => {
 
-        const manifestPath = getManifestPath(directory);
+        const manifestPath = path.join(
+            directory,
+            MANIFEST_FILE
+        );
 
-        if (!manifestPath) {
+        if (!fs.existsSync(manifestPath)) {
 
-            console.log('\x1b[31mConfig not found or seems not encrypted.\x1b[0m');
+            console.log('Manifest not found');
+
             return;
         }
 
-        const manifestCode = path
-            .basename(
-                manifestPath,
-                MANIFEST_EXTENSION
-            );
-
-        const encodedManifest = fs.readFileSync(
-            manifestPath,
-            'utf8'
-        );
-
         const manifest = JSON.parse(
-            decodeManifest(
-                encodedManifest,
-                manifestCode
+            fs.readFileSync(
+                manifestPath,
+                'utf8'
             )
         );
 
